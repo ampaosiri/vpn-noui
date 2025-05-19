@@ -1,11 +1,11 @@
-# vpn-noui
-# sudo nano setup-openvpn-2fa.sh
-# chmod +x setup-openvpn-2fa.sh
-# ./setup-openvpn-2fa.sh
+- vpn-noui
+- sudo nano setup-openvpn-2fa.sh
+- chmod +x setup-openvpn-2fa.sh
+- ./setup-openvpn-2fa.sh
 
-# cd cd OpenVPN-2FA-GoogleAuth/
-# chmod +x *.sh
-# ./openvpn-install.sh
+- cd cd OpenVPN-2FA-GoogleAuth/
+- chmod +x *.sh
+- ./openvpn-install.sh
 
 
 Checking for IPv6 connectivity...
@@ -48,14 +48,14 @@ Enable compression? [y/n]: n
 Do you want to customize encryption settings?
 Unless you know what you're doing, you should stick with the default parameters provided by the script.
 Note that whatever you choose, all the choices presented in the script are safe. (Unlike OpenVPN's defaults)
-See https://github.com/angristan/openvpn-install#security-and-encryption to learn more.
+See https://github.com/angristan/openvpn-install-security-and-encryption to learn more.
 
 Customize encryption settings? [y/n]: n
 
 
-# sudo nano openvpn.pam.template
-# sudo cp openvpn.pam.template /etc/pam.d/openvpn
-# ./manage.sh batch-create
+- sudo nano openvpn.pam.template
+- sudo cp openvpn.pam.template /etc/pam.d/openvpn
+- ./manage.sh batch-create
 
 Enter usernames (one per line). End input with an empty line:
 Username: openvpn01
@@ -67,7 +67,7 @@ Username:
 
 Creating user: openvpn01
 
-# cd /opt/openvpn/clients
-# ./create-zip.sh
+- cd /opt/openvpn/clients
+- ./create-zip.sh
 
-scp -i ~/.ssh/key -r root@ip:/opt/openvpn/clients/ ~/Downloads/VPN-ZIP
+- scp -i ~/.ssh/key -r root@ip:/opt/openvpn/clients/ ~/Downloads/VPN-ZIP
