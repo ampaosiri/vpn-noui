@@ -3,7 +3,7 @@
 #chmod +x *.sh
 #./openvpn-install.sh
 
-#######################################################
+
 Checking for IPv6 connectivity...
 
 Your host does not appear to have IPv6 connectivity.
@@ -47,7 +47,7 @@ Note that whatever you choose, all the choices presented in the script are safe.
 See https://github.com/angristan/openvpn-install#security-and-encryption to learn more.
 
 Customize encryption settings? [y/n]: n
-####################################################
+
 
 #sudo nano openvpn.pam.template
 #sudo cp openvpn.pam.template /etc/pam.d/openvpn
