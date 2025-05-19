@@ -1,7 +1,11 @@
 # vpn-noui
-#cd cd OpenVPN-2FA-GoogleAuth/
-#chmod +x *.sh
-#./openvpn-install.sh
+# sudo nano setup-openvpn-2fa.sh
+# chmod +x setup-openvpn-2fa.sh
+# ./setup-openvpn-2fa.sh
+
+# cd cd OpenVPN-2FA-GoogleAuth/
+# chmod +x *.sh
+# ./openvpn-install.sh
 
 
 Checking for IPv6 connectivity...
@@ -49,9 +53,9 @@ See https://github.com/angristan/openvpn-install#security-and-encryption to lear
 Customize encryption settings? [y/n]: n
 
 
-#sudo nano openvpn.pam.template
-#sudo cp openvpn.pam.template /etc/pam.d/openvpn
-#./manage.sh batch-create
+# sudo nano openvpn.pam.template
+# sudo cp openvpn.pam.template /etc/pam.d/openvpn
+# ./manage.sh batch-create
 
 Enter usernames (one per line). End input with an empty line:
 Username: openvpn01
@@ -63,7 +67,7 @@ Username:
 
 Creating user: openvpn01
 
-#cd /opt/openvpn/clients
-#./create-zip.sh
+# cd /opt/openvpn/clients
+# ./create-zip.sh
 
 scp -i ~/.ssh/key -r root@ip:/opt/openvpn/clients/ ~/Downloads/VPN-ZIP
