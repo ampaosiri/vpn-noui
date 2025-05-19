@@ -1,6 +1,10 @@
 - vpn-noui
+
+- sudo mv autosetup-openvpn-2fa.sh /root/
+- chmod +x autosetup-openvpn-2fa.sh
+- ./autosetup-openvpn-2fa.sh
+ 
 - sudo mv setup-openvpn-2fa.sh /root/
-- sudo nano setup-openvpn-2fa.sh
 - chmod +x setup-openvpn-2fa.sh
 - ./setup-openvpn-2fa.sh
 
