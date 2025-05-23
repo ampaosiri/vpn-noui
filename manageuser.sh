@@ -1,196 +1,269 @@
 #!/bin/bash
 
+# Configuration
 export EASYRSA_PKI="/etc/openvpn/easy-rsa/pki"
 ACTION=$1
 CLIENT=$2
 HOST=$(hostname)
 CLIENTDIR="/opt/openvpn/clients"
+LOG_FILE="/var/log/vpn-management.log"
 
+# Colors
 R="\e[0;91m"
 G="\e[0;92m"
 W="\e[0;97m"
 B="\e[1m"
 C="\e[0m"
 
-if [ $# -lt 1 ] 
-then 
-    echo -e "${W}usage:\n./manage.sh create/revoke <username>\n./manage.sh status\n./manage.sh send <username>\n./manage.sh batch-create${C}"
-    exit 1
-fi
-
-function emailProfile() {
-    CLIENT=$1
-    PASSWORD=$2
-    hostlist=$(cat /etc/hosts | grep -v "#" | grep -v "localhost" | grep -v "127.0.0.1" | grep -v -e "^$")
-    content="""##########    OpenVPN connection profile (${HOST})  ###################
-
-use the attached VPN profile to connect using Tunnelblick or OpenVPN Connect.
-
-VPN usename: ${CLIENT}
-VPN password:  ${PASSWORD}
-
-user attached QR code to register your 2 Factor Authentication with Authy.
-
-If DNS is not working, you can use the /etc/hosts list below to connect to hosts:
-----------------------------------------
-${hostlist}
-"""
-    echo "${content}" | mailx -s "Your OpenVPN profile" -a "${CLIENTDIR}/${CLIENT}/${CLIENT}.ovpn" -a "/opt/openvpn/google-auth/${CLIENT}.png" -r "Devops<devops@company.com>" "${CLIENT}@company.com" || { echo "${R}${B}error mailing profile to client: ${CLIENT}${C}"; exit 1; }
+# Logging
+function log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
 }
 
+# Validate username format
+function validate_username() {
+    local username=$1
+    [[ "$username" =~ ^[a-zA-Z0-9_-]+$ ]] || {
+        log "Invalid username format: $username"
+        return 1
+    }
+    grep -q -E "/CN=$username$" "$EASYRSA_PKI/index.txt" && {
+        log "Username already exists: $username"
+        return 1
+    }
+    return 0
+}
+
+# Email profile function
+function emailProfile() {
+    local CLIENT=$1 PASSWORD=$2
+    log "Sending VPN profile to $CLIENT"
+    
+    local hostlist=$(grep -v -e "^#" -e "localhost" -e "127.0.0.1" -e "^$" /etc/hosts)
+    local content="########## OpenVPN Profile (${HOST}) ###################
+
+Use the attached profile with OpenVPN Connect.
+
+Username: ${CLIENT}
+Password: ${PASSWORD}
+
+Use the QR code for 2FA setup.
+
+Hosts list:
+----------------------------------------
+${hostlist}"
+
+    echo "$content" | mailx -s "Your VPN Profile" \
+        -a "${CLIENTDIR}/${CLIENT}/${CLIENT}.ovpn" \
+        -a "/opt/openvpn/google-auth/${CLIENT}.png" \
+        -r "DevOps<devops@company.com>" \
+        "${CLIENT}@company.com" || {
+        log "Failed to email profile to $CLIENT"
+        return 1
+    }
+}
+
+# Create new client
 function newClient() {
+    local NON_INTERACTIVE=${3:-false}
+    
+    # Validate username
     if [[ -z "$CLIENT" ]]; then
-        echo ""
-        echo "Tell me a name for the client."
-        echo "The name must consist of alphanumeric characters. It may also include an underscore or a dash."
+        if $NON_INTERACTIVE; then
+            log "Client name required in non-interactive mode"
+            return 1
+        fi
+        
+        echo -e "\n${W}Enter client name (alphanumeric, underscore or dash):${C}"
         until [[ $CLIENT =~ ^[a-zA-Z0-9_-]+$ ]]; do
             read -rp "Client name: " -e CLIENT
         done
     fi
 
-    CLIENTEXISTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c -E "/CN=$CLIENT$")
-    if [[ $CLIENTEXISTS -ne 0 ]]; then
-        echo "The specified client CN was already found in easy-rsa, please choose another name."
-        exit 1
+    validate_username "$CLIENT" || return 1
+
+    # Password protection
+    local PASS=1
+    if ! $NON_INTERACTIVE; then
+        echo -e "\n${W}Password protect config file?${C}"
+        echo "1) Passwordless client"
+        echo "2) Password protected"
+        until [[ $PASS =~ ^[1-2]$ ]]; do
+            read -rp "Select [1-2]: " -e -i 1 PASS
+        done
     fi
 
-    echo ""
-    echo "Do you want to protect the configuration file with a password?"
-    echo "(e.g. encrypt the private key with a password)"
-    echo "1) Add a passwordless client"
-    echo "2) Use a password for the client"
-
-    until [[ $PASS =~ ^[1-2]$ ]]; do
-        read -rp "Select an option [1-2]: " -e -i 1 PASS
-    done
-
-    useradd -M -s /usr/sbin/nologin "$CLIENT"
-    if [[ $? -ne 0 ]]; then
-        echo "Failed to create system user. Exiting."
-        exit 1
+    # Create system user
+    if ! useradd -M -s /usr/sbin/nologin "$CLIENT"; then
+        log "Failed to create user: $CLIENT"
+        return 1
     fi
 
-    RANDOM_PASSWORD=$(openssl rand -base64 12)
+    # Generate passwords
+    local RANDOM_PASSWORD=$(openssl rand -base64 12)
     echo "$CLIENT:$RANDOM_PASSWORD" | chpasswd
     mkdir -p "$CLIENTDIR/$CLIENT"
-    FILE_PATH="$CLIENTDIR/$CLIENT/pass"
+    local FILE_PATH="$CLIENTDIR/$CLIENT/pass"
 
+    # Generate certificates
     if [[ $PASS == "2" ]]; then
-        PRIVATE_KEY_PASSWORD=$(openssl rand -base64 12)
-        /etc/openvpn/easy-rsa/easyrsa --batch --passout=pass:"$PRIVATE_KEY_PASSWORD" build-client-full "$CLIENT"
+        local PRIVATE_KEY_PASSWORD=$(openssl rand -base64 12)
+        if ! /etc/openvpn/easy-rsa/easyrsa --batch --passout=pass:"$PRIVATE_KEY_PASSWORD" build-client-full "$CLIENT"; then
+            log "Failed to generate cert for $CLIENT"
+            return 1
+        fi
         echo "private key pass: $PRIVATE_KEY_PASSWORD" > "$FILE_PATH"
         echo "user password: $RANDOM_PASSWORD" >> "$FILE_PATH"
     else
-        /etc/openvpn/easy-rsa/easyrsa --batch build-client-full "$CLIENT" nopass
+        if ! /etc/openvpn/easy-rsa/easyrsa --batch build-client-full "$CLIENT" nopass; then
+            log "Failed to generate cert for $CLIENT"
+            return 1
+        fi
         echo "user password: $RANDOM_PASSWORD" > "$FILE_PATH"
     fi
 
+    # Create OVPN file
     chmod 600 "$FILE_PATH"
     cp /etc/openvpn/client-template.txt "$CLIENTDIR/$CLIENT/${CLIENT}.ovpn"
     {
         echo 'static-challenge "Enter OTP: " 1'
         echo 'auth-user-pass'
         echo "<ca>"
-        cat "/etc/openvpn/easy-rsa/pki/ca.crt"
+        cat "$EASYRSA_PKI/ca.crt"
         echo "</ca>"
         echo "<cert>"
-        awk '/BEGIN/,/END CERTIFICATE/' "/etc/openvpn/easy-rsa/pki/issued/$CLIENT.crt"
+        awk '/BEGIN/,/END CERTIFICATE/' "$EASYRSA_PKI/issued/$CLIENT.crt"
         echo "</cert>"
         echo "<key>"
-        cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
+        cat "$EASYRSA_PKI/private/$CLIENT.key"
         echo "</key>"
-        if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
+        [[ -f /etc/openvpn/tls-crypt.key ]] && {
             echo "<tls-crypt>"
             cat /etc/openvpn/tls-crypt.key
             echo "</tls-crypt>"
-        elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
+        }
+        [[ -f /etc/openvpn/tls-auth.key ]] && {
             echo "key-direction 1"
             echo "<tls-auth>"
-            cat "/etc/openvpn/tls-auth.key"
+            cat /etc/openvpn/tls-auth.key
             echo "</tls-auth>"
-        fi
+        }
     } >> "$CLIENTDIR/$CLIENT/${CLIENT}.ovpn"
 
-    GA_DIR="/opt/openvpn/google-auth"
+    # Generate Google Authenticator
+    local GA_DIR="/opt/openvpn/google-auth"
     mkdir -p "$GA_DIR"
-    GA_FILE="$GA_DIR/$CLIENT"
-    QR_CODE="$GA_DIR/$CLIENT.png"
+    if ! google-authenticator -t -d -f -r 3 -R 30 -W -C -s "$GA_DIR/$CLIENT"; then
+        log "Error generating GA for $CLIENT"
+        return 1
+    fi
 
-    google-authenticator -t -d -f -r 3 -R 30 -W -C -s "$GA_FILE" || { echo "Error generating Google Authenticator profile for $CLIENT"; exit 1; }
-    secret=$(head -n 1 "$GA_FILE")
-    qrencode -t PNG -o "$QR_CODE" "otpauth://totp/$CLIENT@$HOST?secret=$secret&issuer=openvpn" || { echo "Error generating QR code for $CLIENT"; exit 1; }
-    chmod 600 "$GA_FILE" "$QR_CODE"
+    local secret=$(head -n 1 "$GA_DIR/$CLIENT")
+    if ! qrencode -t PNG -o "$GA_DIR/$CLIENT.png" "otpauth://totp/$CLIENT@$HOST?secret=$secret&issuer=openvpn"; then
+        log "Error generating QR for $CLIENT"
+        return 1
+    fi
 
-    echo -e "${G}Client ${CLIENT} created successfully.${C}"
-    exit 0
+    chmod 600 "$GA_DIR/$CLIENT" "$GA_DIR/$CLIENT.png"
+    log "Created client: $CLIENT"
+    return 0
 }
 
+# Batch create clients
 function batchCreateClients() {
-    # รับผู้ใช้จาก arguments หรือ stdin แบบอินเทอร์แอกทีฟ
-    if [ $# -gt 0 ]; then
-        # โหมดอัตโนมัติ (รับผู้ใช้จาก arguments)
+    local users=()
+    
+    # Read from arguments or stdin
+    if [[ $# -gt 0 ]]; then
         users=("$@")
     else
-        # โหมดอินเทอร์แอกทีฟเดิม
-        echo "Enter usernames (one per line). End input with an empty line:"
-        users=()
+        echo -e "\n${W}Enter usernames (one per line). Empty line to finish:${C}"
         while true; do
             read -rp "Username: " user
-            [ -z "$user" ] && break
+            [[ -z "$user" ]] && break
             users+=("$user")
         done
     fi
 
     local error_count=0
     for u in "${users[@]}"; do
-        echo -e "\n${G}Creating user: $u${C}"
-        if ! "$0" create "$u"; then
-            echo -e "${R}Error creating user: $u${C}"
+        if ! validate_username "$u"; then
+            ((error_count++))
+            continue
+        fi
+        
+        log "Creating user: $u"
+        if ! newClient "$u" "" true; then
             ((error_count++))
         fi
     done
 
-    [ $error_count -gt 0 ] && return 1
+    [[ $error_count -gt 0 ]] && return 1
     return 0
 }
 
-if [ "${ACTION}" == "batch-create" ]; then
-    batchCreateClients
-    exit 0
-fi
-
-if [ "${ACTION}" == "create" ]; then
-    newClient || {
-        echo -e "${R}${B}Error creating new client${C}"
-        exit 1
-    }
-    echo -e "${G}New client has been created successfully.${C}"
-fi
-
-if [ "${ACTION}" == "revoke" ]; then
-    [ -z "${CLIENT}" ] &&  { echo -e "${R}Provide a username to revoke${C}"; exit 1; }
-    cd /etc/openvpn/easy-rsa/ || exit 1
-    ./easyrsa --batch revoke "${CLIENT}"
-    EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
-    rm -f "pki/reqs/${CLIENT}.req*"
-    rm -f "pki/private/${CLIENT}.key*"
-    rm -f "pki/issued/${CLIENT}.crt*"
+# Revoke client
+function revokeClient() {
+    [[ -z "$CLIENT" ]] && { log "Client name required"; return 1; }
+    
+    log "Revoking client: $CLIENT"
+    cd /etc/openvpn/easy-rsa/ || return 1
+    
+    ./easyrsa --batch revoke "$CLIENT" || { log "Revoke failed"; return 1; }
+    EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl || { log "CRL generation failed"; return 1; }
+    
+    rm -f "pki/reqs/${CLIENT}.req*" "pki/private/${CLIENT}.key*" "pki/issued/${CLIENT}.crt*"
     rm -f /etc/openvpn/crl.pem
-    cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
+    cp pki/crl.pem /etc/openvpn/crl.pem
     chmod 644 /etc/openvpn/crl.pem
-    sed -i "/CN=${CLIENT}$/d" /etc/openvpn/easy-rsa/pki/index.txt
-    id "${CLIENT}" && userdel -r -f "${CLIENT}"
+    sed -i "/CN=${CLIENT}$/d" pki/index.txt
+    
+    if id "$CLIENT" >/dev/null 2>&1; then
+        userdel -r -f "$CLIENT" || { log "User deletion failed"; return 1; }
+    fi
+    
     rm -rf "${CLIENTDIR:?}/${CLIENT:?}"
-    echo -e "${G}VPN access for $CLIENT is revoked${C}"
+    log "Revoked client: $CLIENT"
+    return 0
+}
+
+# Main execution
+if [[ $# -lt 1 ]]; then 
+    echo -e "${W}Usage:${C}"
+    echo -e "  ${W}./manage.sh create [username]${C}"
+    echo -e "  ${W}./manage.sh revoke <username>${C}"
+    echo -e "  ${W}./manage.sh status${C}"
+    echo -e "  ${W}./manage.sh send <username>${C}"
+    echo -e "  ${W}./manage.sh batch-create [username1 username2 ...]${C}"
+    exit 1
 fi
 
-if [ "${ACTION}" == "status" ]; then
-    grep "^V" /etc/openvpn/easy-rsa/pki/index.txt | grep -v "server_"
-fi
+case "$ACTION" in
+    "batch-create")
+        shift
+        batchCreateClients "$@" || exit 1
+        ;;
+    "create")
+        newClient "$CLIENT" "" false || exit 1
+        echo -e "${G}Created client: $CLIENT${C}"
+        ;;
+    "revoke")
+        revokeClient || exit 1
+        echo -e "${G}Revoked client: $CLIENT${C}"
+        ;;
+    "status")
+        grep "^V" "$EASYRSA_PKI/index.txt" | grep -v "server_"
+        ;;
+    "send")
+        [[ -z "$CLIENT" ]] && { echo -e "${R}Username required${C}"; exit 1; }
+        local PW=$(cat "$CLIENTDIR/$CLIENT/pass" 2>/dev/null) || { echo -e "${R}User not found${C}"; exit 1; }
+        emailProfile "$CLIENT" "$PW" || exit 1
+        echo -e "${G}Sent profile to $CLIENT${C}"
+        ;;
+    *)
+        echo -e "${R}Invalid action: $ACTION${C}"
+        exit 1
+        ;;
+esac
 
-if [ "${ACTION}" == "send" ]; then
-    [ -z "${CLIENT}" ] && { echo -e "${R}Provide a username to send profile to${C}"; exit 1; }
-    PW=$(cat "${CLIENTDIR}/${CLIENT}/pass") || { echo -e "${R}${B}User doesnt exist${C}"; exit 1; }
-    emailProfile "${CLIENT}" "${PW}" || { echo -e "${R}${B}Error sending profile to user ${CLIENT}${C}"; exit 1; }
-    echo -e "${G}Email profile sent to ${CLIENT} ${C}"
-fi
+exit 0
