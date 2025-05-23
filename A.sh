@@ -163,10 +163,4 @@ if [ "${ACTION}" == "send" ]; then
     emailProfile "${CLIENT}" "${PW}" || { echo -e "${R}${B}Error sending profile to user ${CLIENT}${C}"; exit 1; }
     echo -e "${G}Email profile sent to ${CLIENT} ${C}"
 fi
-"""
 
-file_path = "/mnt/data/manage.sh"
-with open(file_path, "w") as f:
-    f.write(modified_manage_sh)
-
-file_path
