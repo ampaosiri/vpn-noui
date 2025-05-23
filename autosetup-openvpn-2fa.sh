@@ -3,8 +3,8 @@
 # Exit immediately if any command fails
 set -e
 
-echo "Cloning OpenVPN-2FA-GoogleAuth repository..."
-git clone https://github.com/ampaosiri/vpn-noui.git
+#echo "Cloning OpenVPN-2FA-GoogleAuth repository..."
+#git clone https://github.com/ampaosiri/vpn-noui.git
 cd vpn-noui
 
 # (Optional) Copy a specific setup script to /root if needed
