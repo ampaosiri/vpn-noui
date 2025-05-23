@@ -1,5 +1,5 @@
 # Save the modified manage.sh content to a file for user download
-modified_manage_sh = """#!/bin/bash
+#!/bin/bash
 
 export EASYRSA_PKI="/etc/openvpn/easy-rsa/pki"
 ACTION=$1
