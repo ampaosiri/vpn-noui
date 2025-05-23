@@ -10,11 +10,9 @@ cd vpn-noui
 echo "Setting execute permissions on all .sh files..."
 chmod +x *.sh
 
-echo "Running OpenVPN installation script..."
-sudo ./openvpn-install.sh
 
-echo "Searching for pam_google_authenticator.so..."
-find / -name pam_google_authenticator.so 2>/dev/null
+#echo "Searching for pam_google_authenticator.so..."
+#find / -name pam_google_authenticator.so 2>/dev/null
 
 # Optional: Manual edit step (comment out to automate)
 # echo "Please modify 'openvpn.pam.template' as needed, then save and exit nano."
