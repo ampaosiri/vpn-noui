@@ -1,5 +1,6 @@
-# Save the modified manage.sh content to a file for user download
-#!/bin/bash
+# Combine the original manage.sh with the new batchCreateClients function and condition block
+
+manage_sh = """#!/bin/bash
 
 export EASYRSA_PKI="/etc/openvpn/easy-rsa/pki"
 ACTION=$1
@@ -13,8 +14,9 @@ W="\\e[0;97m"
 B="\\e[1m"
 C="\\e[0m"
 
-if [ $# -lt 1 ]; then
-    echo -e "${W}usage:\\n./manage.sh create/revoke <username>\\n./manage.sh status\\n./manage.sh send <username>\\n./manage.sh create-batch <userlist.txt>${C}"
+if [ $# -lt 1 ] 
+then 
+    echo -e "${W}usage:\\n./manage.sh create/revoke <username>\\n./manage.sh status\\n./manage.sh send <username>\\n./manage.sh batch-create${C}"
     exit 1
 fi
 
@@ -54,8 +56,15 @@ function newClient() {
         exit 1
     fi
 
-    PASS=1
-    echo "Adding user $CLIENT without password for private key."
+    echo ""
+    echo "Do you want to protect the configuration file with a password?"
+    echo "(e.g. encrypt the private key with a password)"
+    echo "1) Add a passwordless client"
+    echo "2) Use a password for the client"
+
+    until [[ $PASS =~ ^[1-2]$ ]]; do
+        read -rp "Select an option [1-2]: " -e -i 1 PASS
+    done
 
     useradd -M -s /usr/sbin/nologin "$CLIENT"
     if [[ $? -ne 0 ]]; then
@@ -65,15 +74,20 @@ function newClient() {
 
     RANDOM_PASSWORD=$(openssl rand -base64 12)
     echo "$CLIENT:$RANDOM_PASSWORD" | chpasswd
-
     mkdir -p "$CLIENTDIR/$CLIENT"
     FILE_PATH="$CLIENTDIR/$CLIENT/pass"
 
-    /etc/openvpn/easy-rsa/easyrsa --batch build-client-full "$CLIENT" nopass
-    echo "user password: $RANDOM_PASSWORD" > "$FILE_PATH"
+    if [[ $PASS == "2" ]]; then
+        PRIVATE_KEY_PASSWORD=$(openssl rand -base64 12)
+        /etc/openvpn/easy-rsa/easyrsa --batch --passout=pass:"$PRIVATE_KEY_PASSWORD" build-client-full "$CLIENT"
+        echo "private key pass: $PRIVATE_KEY_PASSWORD" > "$FILE_PATH"
+        echo "user password: $RANDOM_PASSWORD" >> "$FILE_PATH"
+    else
+        /etc/openvpn/easy-rsa/easyrsa --batch build-client-full "$CLIENT" nopass
+        echo "user password: $RANDOM_PASSWORD" > "$FILE_PATH"
+    fi
 
     chmod 600 "$FILE_PATH"
-
     cp /etc/openvpn/client-template.txt "$CLIENTDIR/$CLIENT/${CLIENT}.ovpn"
     {
         echo 'static-challenge "Enter OTP: " 1'
@@ -87,7 +101,6 @@ function newClient() {
         echo "<key>"
         cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
         echo "</key>"
-
         if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
             echo "<tls-crypt>"
             cat /etc/openvpn/tls-crypt.key
@@ -106,36 +119,40 @@ function newClient() {
     QR_CODE="$GA_DIR/$CLIENT.png"
 
     google-authenticator -t -d -f -r 3 -R 30 -W -C -s "$GA_FILE" || { echo "Error generating Google Authenticator profile for $CLIENT"; exit 1; }
-
     secret=$(head -n 1 "$GA_FILE")
     qrencode -t PNG -o "$QR_CODE" "otpauth://totp/$CLIENT@$HOST?secret=$secret&issuer=openvpn" || { echo "Error generating QR code for $CLIENT"; exit 1; }
+    chmod 600 "$GA_FILE" "$QR_CODE"
 
-    chmod 600 "$GA_FILE"
-    chmod 600 "$QR_CODE"
-
-    echo -e "${G}New client has been created successfully.${C}"
+    echo -e "${G}Client ${CLIENT} created successfully.${C}"
+    exit 0
 }
 
-function createBatch() {
-    USERLIST=$1
-    if [ ! -f "$USERLIST" ]; then
-        echo -e "${R}User list file not found: $USERLIST${C}"
-        exit 1
-    fi
-    while IFS= read -r USER || [[ -n "$USER" ]]; do
-        echo -e "${G}Creating VPN user: $USER${C}"
-        ./manage.sh create "$USER" <<< "1"
-    done < "$USERLIST"
+function batchCreateClients() {
+    echo "Enter usernames (one per line). End input with an empty line:"
+    users=()
+    while true; do
+        read -rp "Username: " user
+        [[ -z "$user" ]] && break
+        users+=("$user")
+    done
+
+    for u in "${users[@]}"; do
+        echo -e "\\n${G}Creating user: $u${C}"
+        "$0" create "$u"
+    done
 }
 
-if [ "${ACTION}" == "create" ]; then
-    newClient || { echo -e "${R}${B}Error creating new client${C}"; exit 1; }
+if [ "${ACTION}" == "batch-create" ]; then
+    batchCreateClients
+    exit 0
 fi
 
-if [ "${ACTION}" == "create-batch" ]; then
-    [ -z "${CLIENT}" ] &&  { echo -e "${R}Provide a user list file path${C}"; exit 1; }
-    createBatch "${CLIENT}"
-    echo -e "${G}Batch creation completed.${C}"
+if [ "${ACTION}" == "create" ]; then
+    newClient || {
+        echo -e "${R}${B}Error creating new client${C}"
+        exit 1
+    }
+    echo -e "${G}New client has been created successfully.${C}"
 fi
 
 if [ "${ACTION}" == "revoke" ]; then
@@ -143,7 +160,9 @@ if [ "${ACTION}" == "revoke" ]; then
     cd /etc/openvpn/easy-rsa/ || exit 1
     ./easyrsa --batch revoke "${CLIENT}"
     EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
-    rm -f "pki/reqs/${CLIENT}.req*" "pki/private/${CLIENT}.key*" "pki/issued/${CLIENT}.crt*"
+    rm -f "pki/reqs/${CLIENT}.req*"
+    rm -f "pki/private/${CLIENT}.key*"
+    rm -f "pki/issued/${CLIENT}.crt*"
     rm -f /etc/openvpn/crl.pem
     cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
     chmod 644 /etc/openvpn/crl.pem
@@ -154,13 +173,18 @@ if [ "${ACTION}" == "revoke" ]; then
 fi
 
 if [ "${ACTION}" == "status" ]; then
-    cat /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | grep -v "server_"
+    grep "^V" /etc/openvpn/easy-rsa/pki/index.txt | grep -v "server_"
 fi
 
 if [ "${ACTION}" == "send" ]; then
     [ -z "${CLIENT}" ] && { echo -e "${R}Provide a username to send profile to${C}"; exit 1; }
-    PW=$(cat "${CLIENTDIR}/${CLIENT}/pass") || { echo -e "${R}${B}User doesn't exist${C}"; exit 1; }
+    PW=$(cat "${CLIENTDIR}/${CLIENT}/pass") || { echo -e "${R}${B}User doesnt exist${C}"; exit 1; }
     emailProfile "${CLIENT}" "${PW}" || { echo -e "${R}${B}Error sending profile to user ${CLIENT}${C}"; exit 1; }
     echo -e "${G}Email profile sent to ${CLIENT} ${C}"
 fi
+"""
 
+with open("/mnt/data/manage.sh", "w") as f:
+    f.write(manage_sh)
+
+"/mnt/data/manage.sh"
