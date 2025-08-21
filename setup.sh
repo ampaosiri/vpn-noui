@@ -2,7 +2,7 @@
 
 
 
-cd vpn-noui
+#cd vpn-noui
 
 # (Optional) Copy a specific setup script to /root if needed
 # sudo cp setup-openvpn-2fa.sh /root/
